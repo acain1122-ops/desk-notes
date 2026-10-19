@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16161B">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="robots" content="noindex">
+<title>Desk Notes</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  :root {
+    --base: #16161B; --card: #1E1F2B; --card2: #24263A; --ink: #E6E8F5; --muted: #8A8DA6;
+    --blue: #5558FF; --cyan: #3FB4FF; --purple: #8F5CFF; --red: #FF4B5C; --green: #34D399; --amber: #FFB547;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--base); color: var(--ink);
+    font: 16px/1.45 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif; }
+  body { padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); overscroll-behavior-y: contain; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px; background: linear-gradient(var(--base) 80%, transparent); }
+  header h1 { flex: 1; margin: 0; font-size: 22px; font-weight: 650; letter-spacing: .2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); box-shadow: 0 0 8px currentColor; }
+  .dot.ok { background: var(--green); color: var(--green); }
+  .dot.busy { background: var(--cyan); color: var(--cyan); }
+  .dot.err { background: var(--red); color: var(--red); }
+  button { font: inherit; color: var(--ink); background: var(--card2); border: 1px solid #ffffff14;
+    border-radius: 12px; padding: 9px 14px; cursor: pointer; }
+  button.icon { width: 42px; height: 42px; padding: 0; font-size: 22px; line-height: 1; }
+  button.primary { background: var(--blue); border-color: transparent; font-weight: 600;
+    box-shadow: 0 0 18px #5558FF66; }
+  button.danger { color: var(--red); }
+  #status { padding: 0 16px 6px; color: var(--muted); font-size: 13px; min-height: 19px; }
+  main { padding: 4px 12px 96px; display: grid; gap: 12px; }
+  .card { position: relative; background: var(--card); border-radius: 16px; padding: 14px 16px 14px 18px;
+    border: 1px solid #ffffff10; box-shadow: 0 0 0 1px #00000040, 0 6px 22px -10px var(--glow);
+    white-space: pre-wrap; word-break: break-word; cursor: pointer; overflow: hidden; }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: var(--glow); box-shadow: 0 0 14px var(--glow); }
+  .card .title { font-weight: 650; font-size: 17px; margin-bottom: 4px; }
+  .card .body { color: #C9CCE0; font-size: 15px; max-height: 9.5em; overflow: hidden;
+    -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
+  .card.live .body { max-height: 5.8em; }
+  .tag { display: inline-block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  #fab { position: fixed; right: 18px; bottom: calc(22px + env(safe-area-inset-bottom)); width: 60px; height: 60px;
+    border-radius: 20px; font-size: 32px; padding: 0; z-index: 6; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 20px; }
+  /* editor and settings sheets */
+  .sheet { position: fixed; inset: 0; z-index: 10; background: var(--base); display: none; flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  .sheet.open { display: flex; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
+  .bar .grow { flex: 1; }
+  textarea { flex: 1; margin: 0 12px 12px; padding: 16px; resize: none; border-radius: 16px; outline: none;
+    background: var(--card); color: var(--ink); border: 1px solid #ffffff14; font: inherit; font-size: 17px; line-height: 1.5; }
+  textarea:focus { border-color: var(--glowc, var(--blue)); box-shadow: 0 0 16px -4px var(--glowc, var(--blue)); }
+  textarea[readonly] { color: #C9CCE0; }
+  .chips { display: flex; gap: 10px; padding: 0 14px 12px; }
+  .chip { width: 34px; height: 34px; border-radius: 50%; border: 2px solid transparent; padding: 0; }
+  .chip.on { border-color: var(--ink); box-shadow: 0 0 12px var(--c); }
+  .form { padding: 6px 18px; display: grid; gap: 14px; overflow-y: auto; }
+  .form label { display: grid; gap: 6px; font-size: 14px; color: var(--muted); }
+  .form input { font: inherit; color: var(--ink); background: var(--card); border: 1px solid #ffffff1c;
+    border-radius: 12px; padding: 12px; }
+  .form p { margin: 0; color: #C9CCE0; font-size: 14px; }
+  .form ol { margin: 0; padding-left: 20px; color: #C9CCE0; font-size: 14px; }
+  a { color: var(--cyan); }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot" class="dot" title="Sync"></span>
+  <h1>Desk Notes</h1>
+  <button class="icon" id="syncBtn" aria-label="Sync now">&#x21bb;</button>
+  <button class="icon" id="setBtn" aria-label="Settings">&#9881;</button>
+</header>
+<div id="status"></div>
+<main id="list"></main>
+<button id="fab" class="primary" aria-label="New note">+</button>
+
+<section class="sheet" id="editor">
+  <div class="bar">
+    <button id="back">&larr; Done</button>
+    <span class="grow"></span>
+    <button id="del" class="danger">Delete</button>
+  </div>
+  <div class="chips" id="chips"></div>
+  <textarea id="text" placeholder="Type a note. The first line is its title."></textarea>
+</section>
+
+<section class="sheet" id="settings">
+  <div class="bar"><button id="setBack">&larr; Back</button><span class="grow"></span></div>
+  <div class="form">
+    <p>Desk Notes on your phone syncs with the notes on your desktop through your private GitHub repository.</p>
+    <label>GitHub access key (fine-grained token)
+      <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_...">
+    </label>
+    <label>Repository
+      <input id="repo" autocomplete="off" spellcheck="false">
+    </label>
+    <button class="primary" id="save">Save and sync</button>
+    <p>Making the key, once: on github.com go to Settings &rarr; Developer settings &rarr; Fine-grained tokens &rarr;
+      Generate new token. Repository access: only <b>desk-notes-data</b>. Permissions: <b>Contents: Read and write</b>.
+      Copy the key and paste it above. It is kept only on this phone.</p>
+    <button class="danger" id="forget">Remove the key from this phone</button>
+  </div>
+</section>
+
+<script>
+"use strict";
+const COLORS = { blue: "#5558FF", cyan: "#3FB4FF", purple: "#8F5CFF", red: "#FF4B5C", green: "#34D399", amber: "#FFB547" };
+const LIVE_ID = "owner-queue";
+const API_BASE = new URLSearchParams(location.search).get("api") || "https://api.github.com";  // ?api= only for local tests
+const K = { token: "dn.token", repo: "dn.repo", mine: "dn.mine", base: "dn.base", sha: "dn.sha", synced: "dn.synced" };
+const $ = id => document.getElementById(id);
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } };
+const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
+
+let mine = load(K.mine, {});          // this phone's notes {id: {id,text,color,updated,live?}}
+let base = load(K.base, {});          // last version both sides agreed on
+let sha = load(K.sha, null);
+let editing = null, syncing = false, again = false, pushTimer = null;
+
+const uid = () => Math.random().toString(16).slice(2, 10);
+const content = n => n ? n.text + "\u0000" + n.color : null;
+
+// Same three-way merge as scripts/desk_sync.py (the desktop decides the live note).
+function merge(b, m, t) {
+  const out = {}; let conflicts = 0;
+  const ids = [...new Set([...Object.keys(t), ...Object.keys(m), ...Object.keys(b)])];
+  for (const id of ids) {
+    const B = b[id], M = m[id], T = t[id];
+    if (id === LIVE_ID) { if (T) out[id] = T; continue; }
+    let pick;
+    if (content(M) === content(T)) pick = M;
+    else if (content(M) === content(B)) pick = T;
+    else if (content(T) === content(B)) pick = M;
+    else if (!M) pick = T;
+    else if (!T) pick = M;
+    else { pick = M; conflicts++; const c = { ...T, id: uid(), updated: Date.now() }; out[c.id] = c; }
+    if (pick) out[id] = pick;
+  }
+  return [out, conflicts];
+}
+
+const b64enc = s => { const b = new TextEncoder().encode(s); let x = ""; for (const c of b) x += String.fromCharCode(c); return btoa(x); };
+const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, "")), c => c.charCodeAt(0)));
+
+function api(method, body) {
+  const repo = load(K.repo, "acain1122-ops/desk-notes-data");
+  return fetch(`${API_BASE}/repos/${repo}/contents/notes.json`, {
+    method, cache: "no-store",
+    headers: { Authorization: `Bearer ${load(K.token, "")}`, Accept: "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+function setStatus(kind, msg) {
+  $("dot").className = "dot " + kind;
+  $("status").textContent = msg;
+}
+
+async function sync() {
+  if (!load(K.token, "")) { setStatus("", "Add your GitHub key in settings (gear) to sync with your desktop."); return; }
+  if (syncing) { again = true; return; }
+  syncing = true; setStatus("busy", "Syncing...");
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await api("GET");
+      let theirs = {};
+      if (r.status === 200) {
+        const data = await r.json();
+        sha = data.sha;
+        const doc = JSON.parse(b64dec(data.content));
+        for (const n of doc.notes || []) if (n && n.id) theirs[n.id] = n;
+      } else if (r.status === 404) { sha = null; }
+      else if (r.status === 401) throw new Error("GitHub didn't accept the key. Check it in settings.");
+      else throw new Error(`GitHub answered ${r.status}.`);
+      const [merged, conflicts] = merge(base, mine, theirs);
+      const same = (a, b) => JSON.stringify(Object.keys(a).sort().map(k => content(a[k]))) ===
+                             JSON.stringify(Object.keys(b).sort().map(k => content(b[k])));
+      if (!same(merged, theirs)) {
+        const doc = { version: 1, notes: Object.values(merged) };
+        const put = await api("PUT", { message: "Desk Notes sync (phone)", sha: sha || undefined,
+                                       content: b64enc(JSON.stringify(doc, null, 2) + "\n") });
+        if (put.status === 409 || put.status === 422) continue;   // changed meanwhile: fetch and merge again
+        if (put.status === 401 || put.status === 403) throw new Error("The key can't write. It needs Contents: Read and write.");
+        if (!put.ok) throw new Error(`GitHub answered ${put.status} when saving.`);
+        sha = (await put.json()).content.sha;
+      }
+      if (editing && merged[editing.id] && document.activeElement === $("text")) merged[editing.id] = mine[editing.id] || merged[editing.id];
+      mine = merged; base = JSON.parse(JSON.stringify(merged));
+      save(K.mine, mine); save(K.base, base); save(K.sha, sha); save(K.synced, Date.now());
+      render();
+      setStatus("ok", conflicts ? `Synced. ${conflicts} note(s) were edited in both places; both versions kept.` : syncedText());
+      return;
+    }
+    setStatus("err", "Busy on the other side. Will try again.");
+  } catch (e) {
+    setStatus("err", navigator.onLine ? (e.message || "Couldn't sync.") : "Offline. Your changes are saved here and sync when you're back online.");
+  } finally {
+    syncing = false;
+    if (again) { again = false; setTimeout(sync, 300); }
+  }
+}
+
+function syncedText() {
+  const t = load(K.synced, 0);
+  return t ? "Synced " + new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+}
+
+function schedulePush() { clearTimeout(pushTimer); pushTimer = setTimeout(sync, 1500); }
+
+function render() {
+  const list = $("list"); list.innerHTML = "";
+  const notes = Object.values(mine).sort((a, b) => (a.id === LIVE_ID) - (b.id === LIVE_ID) || (b.updated || 0) - (a.updated || 0));
+  if (!notes.length) list.innerHTML = '<div class="empty">No notes yet. Tap + to add one.</div>';
+  for (const n of notes) {
+    const el = document.createElement("div");
+    el.className = "card" + (n.id === LIVE_ID ? " live" : "");
+    el.style.setProperty("--glow", COLORS[n.color] || COLORS.blue);
+    const [first, ...rest] = (n.text || "").split("\n");
+    const t = document.createElement("div"); t.className = "title"; t.textContent = first || "(empty note)";
+    const b = document.createElement("div"); b.className = "body"; b.textContent = rest.join("\n").replace(/^\n+/, "");
+    el.append(t, b);
+    if (n.id === LIVE_ID) { const g = document.createElement("div"); g.className = "tag"; g.textContent = "From your desktop · view only"; el.append(g); }
+    el.onclick = () => openEditor(n.id);
+    list.append(el);
+  }
+}
+
+function openEditor(id) {
+  const isNew = !id;
+  if (isNew) { id = uid(); mine[id] = { id, text: "", color: "blue", updated: Date.now() }; }
+  editing = { id, isNew };
+  const n = mine[id], live = id === LIVE_ID;
+  $("text").value = n.text; $("text").readOnly = live;
+  $("del").style.display = live ? "none" : "";
+  $("chips").style.display = live ? "none" : "";
+  paintChips(n.color);
+  $("editor").classList.add("open");
+  history.pushState({ editor: 1 }, "");   // the phone's Back button closes the note
+  if (!live) setTimeout(() => $("text").focus(), 50);
+}
+
+function paintChips(color) {
+  $("chips").innerHTML = "";
+  $("editor").style.setProperty("--glowc", COLORS[color] || COLORS.blue);
+  for (const [name, hex] of Object.entries(COLORS)) {
+    const c = document.createElement("button");
+    c.className = "chip" + (name === color ? " on" : ""); c.style.background = hex; c.style.setProperty("--c", hex);
+    c.setAttribute("aria-label", name);
+    c.onclick = () => { const n = mine[editing.id]; n.color = name; n.updated = Date.now(); save(K.mine, mine); paintChips(name); schedulePush(); };
+    $("chips").append(c);
+  }
+}
+
+function closeEditor() {
+  if (!editing) return;
+  const n = editing.id ? mine[editing.id] : null;
+  if (n && editing.isNew && !n.text.trim()) delete mine[editing.id];   // an untouched new note isn't kept
+  save(K.mine, mine);
+  editing = null; $("editor").classList.remove("open"); $("text").blur();
+  render(); schedulePush();
+}
+
+$("text").addEventListener("input", () => {
+  const n = mine[editing.id]; n.text = $("text").value; n.updated = Date.now(); save(K.mine, mine); schedulePush();
+});
+const leaveEditor = () => (history.state && history.state.editor) ? history.back() : closeEditor();
+$("back").onclick = leaveEditor;
+$("del").onclick = () => {
+  if (!editing || !confirm("Delete this note on the phone and the desktop?")) return;
+  delete mine[editing.id]; save(K.mine, mine); editing = { id: null };
+  leaveEditor();
+};
+$("fab").onclick = () => openEditor(null);
+$("syncBtn").onclick = sync;
+$("setBtn").onclick = () => { $("token").value = load(K.token, ""); $("repo").value = load(K.repo, "acain1122-ops/desk-notes-data"); $("settings").classList.add("open"); };
+$("setBack").onclick = () => $("settings").classList.remove("open");
+$("save").onclick = () => {
+  save(K.token, $("token").value.trim()); save(K.repo, $("repo").value.trim() || "acain1122-ops/desk-notes-data");
+  $("settings").classList.remove("open"); sync();
+};
+$("forget").onclick = () => { if (confirm("Remove the GitHub key from this phone? Notes stay here and on the desktop.")) { localStorage.removeItem(K.token); $("token").value = ""; setStatus("", "Key removed."); } };
+window.addEventListener("popstate", closeEditor);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); else if (editing) save(K.mine, mine); });
+window.addEventListener("online", sync);
+setInterval(() => { if (document.visibilityState === "visible" && !syncing) sync(); }, 15000);
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+render(); setStatus("", syncedText()); sync();
+</script>
+</body>
+</html>
