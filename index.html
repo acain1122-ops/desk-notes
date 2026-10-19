@@ -169,6 +169,7 @@ async function sync() {
   if (!load(K.token, "")) { setStatus("", "Add your GitHub key in settings (gear) to sync with your desktop."); return; }
   if (syncing) { again = true; return; }
   syncing = true; setStatus("busy", "Syncing...");
+  const snap = JSON.parse(JSON.stringify(mine));   // what this sync uploads; typing meanwhile is kept apart
   try {
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await api("GET");
@@ -181,7 +182,7 @@ async function sync() {
       } else if (r.status === 404) { sha = null; }
       else if (r.status === 401) throw new Error("GitHub didn't accept the key. Check it in settings.");
       else throw new Error(`GitHub answered ${r.status}.`);
-      const [merged, conflicts] = merge(base, mine, theirs);
+      const [merged, conflicts] = merge(base, snap, theirs);
       const same = (a, b) => JSON.stringify(Object.keys(a).sort().map(k => content(a[k]))) ===
                              JSON.stringify(Object.keys(b).sort().map(k => content(b[k])));
       if (!same(merged, theirs)) {
@@ -193,8 +194,18 @@ async function sync() {
         if (!put.ok) throw new Error(`GitHub answered ${put.status} when saving.`);
         sha = (await put.json()).content.sha;
       }
-      if (editing && merged[editing.id] && document.activeElement === $("text")) merged[editing.id] = mine[editing.id] || merged[editing.id];
-      mine = merged; base = JSON.parse(JSON.stringify(merged));
+      // base = exactly what GitHub now holds. Edits made while this sync ran are laid
+      // back on top and go up with the next sync (never counted as already synced).
+      base = JSON.parse(JSON.stringify(merged));
+      const next = JSON.parse(JSON.stringify(merged));
+      let typedMeanwhile = false;
+      for (const id of new Set([...Object.keys(snap), ...Object.keys(mine)])) {
+        if (content(mine[id]) === content(snap[id])) continue;
+        typedMeanwhile = true;
+        if (mine[id]) next[id] = mine[id]; else delete next[id];
+      }
+      mine = next;
+      if (typedMeanwhile) again = true;
       save(K.mine, mine); save(K.base, base); save(K.sha, sha); save(K.synced, Date.now());
       render();
       setStatus("ok", conflicts ? `Synced. ${conflicts} note(s) were edited in both places; both versions kept.` : syncedText());
