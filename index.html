@@ -45,6 +45,18 @@
   .card .body { color: #C9CCE0; font-size: 15px; max-height: 9.5em; overflow: hidden;
     -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
   .card.live .body { max-height: 5.8em; }
+  .tabs { display: flex; gap: 6px; overflow-x: auto; margin: -4px -6px 10px -4px; padding-bottom: 2px; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    padding: 5px 11px 5px 9px; border-radius: 10px; font-size: 13px; color: var(--muted); background: #ffffff08;
+    border: 1px solid #ffffff10; }
+  .tab::before { content: "●"; color: var(--c); margin-right: 6px; font-size: 10px; vertical-align: 1px; }
+  .tab.on { color: var(--ink); background: #ffffff14; border-color: var(--c); box-shadow: 0 0 10px -3px var(--c); font-weight: 600; }
+  .tab.add { color: var(--muted); padding: 5px 12px; }
+  .tab.add::before { content: none; }
+  .picks { display: grid; gap: 10px; }
+  .pick { text-align: left; padding: 14px; border-left: 4px solid var(--c); background: var(--card); }
+  .hint { color: var(--muted); }
   .tag { display: inline-block; font-size: 12px; color: var(--muted); margin-top: 6px; }
   #fab { position: fixed; right: 18px; bottom: calc(22px + env(safe-area-inset-bottom)); width: 60px; height: 60px;
     border-radius: 20px; font-size: 32px; padding: 0; z-index: 6; }
@@ -86,10 +98,19 @@
   <div class="bar">
     <button id="back">&larr; Done</button>
     <span class="grow"></span>
+    <button id="stackBtn">Stack</button>
     <button id="del" class="danger">Delete</button>
   </div>
   <div class="chips" id="chips"></div>
   <textarea id="text" placeholder="Type a note. The first line is its title."></textarea>
+</section>
+
+<section class="sheet" id="picker">
+  <div class="bar"><button id="pickBack">&larr; Back</button><span class="grow"></span></div>
+  <div class="form">
+    <p>Stack this note with:</p>
+    <div id="pickList" class="picks"></div>
+  </div>
 </section>
 
 <section class="sheet" id="settings">
@@ -127,24 +148,39 @@ let editing = null, syncing = false, again = false, pushTimer = null;
 
 const uid = () => Math.random().toString(16).slice(2, 10);
 const content = n => n ? n.text + "\u0000" + n.color : null;
+const place = n => n ? (n.stack || "") + "\u0000" + (n.stack ? (n.tab ?? 0) : "") : null;
+const sig = n => n ? content(n) + "\u0001" + place(n) : null;
+function withPlace(n, from) {   // n's words with from's stack and tab
+  const out = { ...n }; delete out.stack; delete out.tab;
+  if (from && from.stack) { out.stack = from.stack; out.tab = from.tab ?? 0; }
+  return out;
+}
+function tidyStacks(notes) {    // a stack needs two notes
+  const count = {};
+  for (const n of Object.values(notes)) if (n.stack) count[n.stack] = (count[n.stack] || 0) + 1;
+  for (const [id, n] of Object.entries(notes)) if (n.stack && count[n.stack] < 2) notes[id] = withPlace(n, null);
+  return notes;
+}
 
-// Same three-way merge as scripts/desk_sync.py (the desktop decides the live note).
+// Same three-way merge as scripts/desk_sync.py: words and color decide a double
+// edit (both kept); stack and tab merge on their own; the desktop writes the live note's words.
 function merge(b, m, t) {
   const out = {}; let conflicts = 0;
   const ids = [...new Set([...Object.keys(t), ...Object.keys(m), ...Object.keys(b)])];
   for (const id of ids) {
     const B = b[id], M = m[id], T = t[id];
-    if (id === LIVE_ID) { if (T) out[id] = T; continue; }
     let pick;
-    if (content(M) === content(T)) pick = M;
+    if (id === LIVE_ID) pick = T;
+    else if (content(M) === content(T)) pick = M || T;
     else if (content(M) === content(B)) pick = T;
     else if (content(T) === content(B)) pick = M;
     else if (!M) pick = T;
     else if (!T) pick = M;
     else { pick = M; conflicts++; const c = { ...T, id: uid(), updated: Date.now() }; out[c.id] = c; }
+    if (pick && M && T) pick = withPlace(pick, place(M) === place(B) ? T : M);
     if (pick) out[id] = pick;
   }
-  return [out, conflicts];
+  return [tidyStacks(out), conflicts];
 }
 
 const b64enc = s => { const b = new TextEncoder().encode(s); let x = ""; for (const c of b) x += String.fromCharCode(c); return btoa(x); };
@@ -183,8 +219,8 @@ async function sync() {
       else if (r.status === 401) throw new Error("GitHub didn't accept the key. Check it in settings.");
       else throw new Error(`GitHub answered ${r.status}.`);
       const [merged, conflicts] = merge(base, snap, theirs);
-      const same = (a, b) => JSON.stringify(Object.keys(a).sort().map(k => content(a[k]))) ===
-                             JSON.stringify(Object.keys(b).sort().map(k => content(b[k])));
+      const same = (a, b) => JSON.stringify(Object.keys(a).sort().map(k => k + sig(a[k]))) ===
+                             JSON.stringify(Object.keys(b).sort().map(k => k + sig(b[k])));
       if (!same(merged, theirs)) {
         const doc = { version: 1, notes: Object.values(merged) };
         const put = await api("PUT", { message: "Desk Notes sync (phone)", sha: sha || undefined,
@@ -200,7 +236,7 @@ async function sync() {
       const next = JSON.parse(JSON.stringify(merged));
       let typedMeanwhile = false;
       for (const id of new Set([...Object.keys(snap), ...Object.keys(mine)])) {
-        if (content(mine[id]) === content(snap[id])) continue;
+        if (sig(mine[id]) === sig(snap[id])) continue;
         typedMeanwhile = true;
         if (mine[id]) next[id] = mine[id]; else delete next[id];
       }
@@ -227,32 +263,86 @@ function syncedText() {
 
 function schedulePush() { clearTimeout(pushTimer); pushTimer = setTimeout(sync, 1500); }
 
+const shownTab = load("dn.shownTab", {});   // which tab each stack shows here (this phone only)
+const titleOf = n => ((n.text || "").split("\n")[0].trim()) || "Untitled";
+
+function groups() {   // [[note], [note, note, ...stack in tab order], ...], newest first, Owner tasks last
+  const by = {};
+  for (const n of Object.values(mine)) (by[n.stack || "solo:" + n.id] ||= []).push(n);
+  const gs = Object.values(by).map(g => g.sort((a, b) => (a.tab ?? 0) - (b.tab ?? 0) || (a.id < b.id ? -1 : 1)));
+  const live = g => g.some(n => n.id === LIVE_ID), newest = g => Math.max(...g.map(n => n.updated || 0));
+  return gs.sort((a, b) => live(a) - live(b) || newest(b) - newest(a));
+}
+
 function render() {
   const list = $("list"); list.innerHTML = "";
-  const notes = Object.values(mine).sort((a, b) => (a.id === LIVE_ID) - (b.id === LIVE_ID) || (b.updated || 0) - (a.updated || 0));
-  if (!notes.length) list.innerHTML = '<div class="empty">No notes yet. Tap + to add one.</div>';
-  for (const n of notes) {
+  const gs = groups();
+  if (!gs.length) list.innerHTML = '<div class="empty">No notes yet. Tap + to add one.</div>';
+  for (const g of gs) {
+    const sid = g[0].stack;
+    const n = (sid && g.find(x => x.id === shownTab[sid])) || g[0];
     const el = document.createElement("div");
-    el.className = "card" + (n.id === LIVE_ID ? " live" : "");
+    el.className = "card" + (n.id === LIVE_ID ? " live" : "") + (sid ? " stacked" : "");
     el.style.setProperty("--glow", COLORS[n.color] || COLORS.blue);
+    if (sid) {
+      const tabs = document.createElement("div"); tabs.className = "tabs";
+      for (const m of g) {
+        const tb = document.createElement("button");
+        tb.className = "tab" + (m === n ? " on" : "");
+        tb.style.setProperty("--c", COLORS[m.color] || COLORS.blue);
+        tb.textContent = titleOf(m);
+        tb.onclick = e => { e.stopPropagation(); shownTab[sid] = m.id; save("dn.shownTab", shownTab); render(); };
+        tabs.append(tb);
+      }
+      const add = document.createElement("button"); add.className = "tab add"; add.textContent = "+";
+      add.setAttribute("aria-label", "New tab in this stack");
+      add.onclick = e => { e.stopPropagation(); openEditor(null, sid); };
+      tabs.append(add);
+      el.append(tabs);
+    }
     const [first, ...rest] = (n.text || "").split("\n");
     const t = document.createElement("div"); t.className = "title"; t.textContent = first || "(empty note)";
     const b = document.createElement("div"); b.className = "body"; b.textContent = rest.join("\n").replace(/^\n+/, "");
     el.append(t, b);
-    if (n.id === LIVE_ID) { const g = document.createElement("div"); g.className = "tag"; g.textContent = "From your desktop · view only"; el.append(g); }
+    if (n.id === LIVE_ID) { const tg = document.createElement("div"); tg.className = "tag"; tg.textContent = "From your desktop · view only"; el.append(tg); }
     el.onclick = () => openEditor(n.id);
     list.append(el);
   }
 }
 
-function openEditor(id) {
+// ----- stacks -----
+function stackOf(id) { const n = mine[id]; return n && n.stack ? Object.values(mine).filter(x => x.stack === n.stack).sort((a, b) => (a.tab ?? 0) - (b.tab ?? 0)) : (n ? [n] : []); }
+function touch(n) { n.updated = Date.now(); }
+function joinStack(id, targetId) {   // put note id into target's stack, as its last tab
+  const target = mine[targetId], note = mine[id];
+  const sid = target.stack || target.id;
+  if (!target.stack) { target.stack = sid; target.tab = 0; touch(target); }
+  const last = Math.max(...stackOf(targetId).filter(x => x.id !== id).map(x => x.tab ?? 0));
+  note.stack = sid; note.tab = last + 1; touch(note);
+  shownTab[sid] = id; save("dn.shownTab", shownTab);
+  tidyStacks(mine); save(K.mine, mine); schedulePush();
+}
+function unstack(id) {
+  const n = mine[id]; delete n.stack; delete n.tab; touch(n);
+  tidyStacks(mine); save(K.mine, mine); schedulePush();
+}
+
+function openEditor(id, intoStack) {
   const isNew = !id;
-  if (isNew) { id = uid(); mine[id] = { id, text: "", color: "blue", updated: Date.now() }; }
+  if (isNew) {
+    id = uid(); mine[id] = { id, text: "", color: "blue", updated: Date.now() };
+    if (intoStack) {
+      const ms = Object.values(mine).filter(x => x.stack === intoStack);
+      Object.assign(mine[id], { stack: intoStack, tab: Math.max(...ms.map(x => x.tab ?? 0)) + 1, color: ms[0]?.color || "blue" });
+      shownTab[intoStack] = id; save("dn.shownTab", shownTab);
+    }
+  }
   editing = { id, isNew };
   const n = mine[id], live = id === LIVE_ID;
   $("text").value = n.text; $("text").readOnly = live;
   $("del").style.display = live ? "none" : "";
   $("chips").style.display = live ? "none" : "";
+  paintStackButton();
   paintChips(n.color);
   $("editor").classList.add("open");
   history.pushState({ editor: 1 }, "");   // the phone's Back button closes the note
@@ -271,11 +361,32 @@ function paintChips(color) {
   }
 }
 
+function paintStackButton() {
+  const n = editing && mine[editing.id];
+  $("stackBtn").textContent = n && n.stack ? "Unstack" : "Stack";
+}
+
+function openPicker() {   // choose a note or stack to put this note into
+  const n = mine[editing.id]; if (!n) return;
+  if (n.stack) { unstack(n.id); paintStackButton(); return; }
+  const list = $("pickList"); list.innerHTML = "";
+  for (const g of groups()) {
+    if (g.some(x => x.id === n.id)) continue;
+    const b = document.createElement("button"); b.className = "pick";
+    b.style.setProperty("--c", COLORS[g[0].color] || COLORS.blue);
+    b.textContent = g.length > 1 ? g.map(titleOf).join("  ·  ") : titleOf(g[0]);
+    b.onclick = () => { joinStack(n.id, g[0].id); $("picker").classList.remove("open"); paintStackButton(); };
+    list.append(b);
+  }
+  if (!list.children.length) list.innerHTML = '<p class="hint">No other notes to stack with yet.</p>';
+  $("picker").classList.add("open");
+}
+
 function closeEditor() {
   if (!editing) return;
   const n = editing.id ? mine[editing.id] : null;
   if (n && editing.isNew && !n.text.trim()) delete mine[editing.id];   // an untouched new note isn't kept
-  save(K.mine, mine);
+  tidyStacks(mine); save(K.mine, mine);
   editing = null; $("editor").classList.remove("open"); $("text").blur();
   render(); schedulePush();
 }
@@ -287,10 +398,12 @@ const leaveEditor = () => (history.state && history.state.editor) ? history.back
 $("back").onclick = leaveEditor;
 $("del").onclick = () => {
   if (!editing || !confirm("Delete this note on the phone and the desktop?")) return;
-  delete mine[editing.id]; save(K.mine, mine); editing = { id: null };
+  delete mine[editing.id]; tidyStacks(mine); save(K.mine, mine); editing = { id: null };
   leaveEditor();
 };
 $("fab").onclick = () => openEditor(null);
+$("stackBtn").onclick = openPicker;
+$("pickBack").onclick = () => $("picker").classList.remove("open");
 $("syncBtn").onclick = sync;
 $("setBtn").onclick = () => { $("token").value = load(K.token, ""); $("repo").value = load(K.repo, "acain1122-ops/desk-notes-data"); $("settings").classList.add("open"); };
 $("setBack").onclick = () => $("settings").classList.remove("open");
