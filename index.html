@@ -45,6 +45,7 @@
   .card .body { color: #C9CCE0; font-size: 15px; max-height: 9.5em; overflow: hidden;
     -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
   .card.live .body { max-height: 5.8em; }
+  .card .due { color: #FF6B7A; }
   .tabs { display: flex; gap: 6px; overflow-x: auto; margin: -4px -6px 10px -4px; padding-bottom: 2px; scrollbar-width: none; }
   .tabs::-webkit-scrollbar { display: none; }
   .tab { flex: 0 0 auto; max-width: 44%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -274,6 +275,79 @@ function groups() {   // [[note], [note, note, ...stack in tab order], ...], new
   return gs.sort((a, b) => live(a) - live(b) || newest(b) - newest(a));
 }
 
+// ----- dates: lines naming a date within a week show red (same rules as the desktop's app/dates.py; keep in step) -----
+const DUE_DAYS = 7, OVERDUE_DAYS = 14;
+const MONTH_NO = {jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12};
+const MON_RE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?";
+const DAY_RE = "(\\d{1,2})(?:st|nd|rd|th)?";
+const WEEKDAY_NO = {monday: 0, tuesday: 1, tues: 1, wednesday: 2, weds: 2, thursday: 3, thurs: 3, friday: 4, saturday: 5, sunday: 6};
+const NUM_WORD = {a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7};
+const D_RE = {
+  iso: /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g,
+  num: /(\d{1,2})([\/-])(\d{1,2})(?:\2(\d{2}|\d{4}))?(?![\d\/])/g,
+  md: new RegExp("\\b" + MON_RE + "\\s+" + DAY_RE + "\\b(?:,?\\s+(\\d{4}))?", "gi"),
+  dm: new RegExp("\\b(?:the\\s+)?" + DAY_RE + "(?:\\s+of)?\\s+" + MON_RE + "\\b(?:,?\\s+(\\d{4}))?", "gi"),
+  rel: /\b(today|tonight|tomorrow|tmrw|tmw)\b/gi,
+  inN: /\bin\s+(\d{1,2}|a|an|one|two|three|four|five|six|seven)\s+(day|days|week|weeks)\b/gi,
+  wd: new RegExp("\\b(next\\s+)?(" + Object.keys(WEEKDAY_NO).sort((a, b) => b.length - a.length).join("|") + ")\\b", "gi"),
+  wordBefore: /(?:due|by|on|before|until|till|thru|through|for|starting|start|from|deadline|dated?)\s*$/i,
+  unitAfter: /^\s*(?:"|in\b|inch|ft\b|feet|'|mm\b|emt|pvc|rigid|conduit|mc\b|awg|hp\b|amp|a\b|v\b)/,
+};
+function dMake(y, m, d) { const x = new Date(y, m - 1, d); return x.getFullYear() === y && x.getMonth() === m - 1 && x.getDate() === d ? x : null; }
+function dDays(a, b) { return Math.round((a - b) / 86400000); }
+function dAdd(day, n) { return new Date(day.getFullYear(), day.getMonth(), day.getDate() + n); }
+function dNearYear(m, d, today) {
+  let best = null;
+  for (const y of [today.getFullYear() - 1, today.getFullYear(), today.getFullYear() + 1]) {
+    const x = dMake(y, m, d);
+    if (x && (!best || Math.abs(dDays(x, today)) < Math.abs(dDays(best, today)))) best = x;
+  }
+  return best;
+}
+function dYear(text, m, d, today) { if (text) { const y = +text; return dMake(y < 100 ? y + 2000 : y, m, d); } return dNearYear(m, d, today); }
+function dIsFraction(line, mt) {
+  const [, a, sep, b, year] = mt;
+  if (year) return false;
+  const before = line.slice(0, mt.index);
+  if (D_RE.wordBefore.test(before)) return false;
+  if (sep === "/" && [2, 4, 8, 16, 32, 64].includes(+b) && +a < +b) return true;
+  if (/\d[-\s]$/.test(before)) return true;
+  return D_RE.unitAfter.test(line.slice(mt.index + mt[0].length, mt.index + mt[0].length + 8).toLowerCase());
+}
+function datesIn(line, today) {
+  const found = [];
+  for (const mt of line.matchAll(D_RE.iso)) { const x = dMake(+mt[1], +mt[2], +mt[3]); if (x) found.push(x); }
+  for (const mt of line.matchAll(D_RE.num)) {
+    if (mt.index > 0 && "0123456789/.-".includes(line[mt.index - 1])) continue;  // part of a longer number
+    D_RE.iso.lastIndex = 0;
+    if (/\b\d{4}-\d{1,2}-\d{1,2}\b/.test(line.slice(Math.max(0, mt.index - 5), mt.index + mt[0].length + 3)) || dIsFraction(line, mt)) continue;
+    const m = +mt[1], d = +mt[3];
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) { const x = dYear(mt[4], m, d, today); if (x) found.push(x); }
+  }
+  for (const mt of line.matchAll(D_RE.md)) { const x = dYear(mt[3], MONTH_NO[mt[1].slice(0, 3).toLowerCase()], +mt[2], today); if (x) found.push(x); }
+  for (const mt of line.matchAll(D_RE.dm)) { const x = dYear(mt[3], MONTH_NO[mt[2].slice(0, 3).toLowerCase()], +mt[1], today); if (x) found.push(x); }
+  for (const mt of line.matchAll(D_RE.rel)) found.push(dAdd(today, ["today", "tonight"].includes(mt[1].toLowerCase()) ? 0 : 1));
+  for (const mt of line.matchAll(D_RE.inN)) {
+    const w = mt[1].toLowerCase(), n = /^\d+$/.test(w) ? +w : NUM_WORD[w];
+    found.push(dAdd(today, n * (mt[2].toLowerCase().startsWith("week") ? 7 : 1)));
+  }
+  for (const mt of line.matchAll(D_RE.wd)) {
+    const want = WEEKDAY_NO[mt[2].toLowerCase()], wk = (today.getDay() + 6) % 7;
+    found.push(dAdd(today, (want - wk + 7) % 7 + (mt[1] ? 7 : 0)));
+  }
+  return found;
+}
+function lineDone(line) { const s = line.trim().toLowerCase(); return ["✓", "✔", "☑", "[x]", "(done)", "done:", "~~"].some(p => s.startsWith(p)); }
+function dueLines(text, today) {
+  today = today || new Date(); today = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const out = [];
+  (text || "").split("\n").forEach((line, i) => {
+    if (line.trim() && !lineDone(line) && datesIn(line, today).some(x => { const d = dDays(x, today); return d >= -OVERDUE_DAYS && d <= DUE_DAYS; })) out.push(i);
+  });
+  return out;
+}
+// ----- end dates -----
+
 function render() {
   const list = $("list"); list.innerHTML = "";
   const gs = groups();
@@ -301,8 +375,15 @@ function render() {
       el.append(tabs);
     }
     const [first, ...rest] = (n.text || "").split("\n");
-    const t = document.createElement("div"); t.className = "title"; t.textContent = first || "(empty note)";
-    const b = document.createElement("div"); b.className = "body"; b.textContent = rest.join("\n").replace(/^\n+/, "");
+    const due = new Set(dueLines(n.text));
+    const t = document.createElement("div"); t.className = "title" + (due.has(0) ? " due" : ""); t.textContent = first || "(empty note)";
+    const b = document.createElement("div"); b.className = "body";
+    let skip = 0; while (skip < rest.length && !rest[skip]) skip++;  // blank lines right under the title
+    rest.slice(skip).forEach((line, i) => {  // each line, red if it names a date within a week
+      if (i) b.append("\n");
+      if (due.has(i + skip + 1)) { const sp = document.createElement("span"); sp.className = "due"; sp.textContent = line; b.append(sp); }
+      else b.append(line);
+    });
     el.append(t, b);
     if (n.id === LIVE_ID) { const tg = document.createElement("div"); tg.className = "tag"; tg.textContent = "From your desktop · view only"; el.append(tg); }
     el.onclick = () => openEditor(n.id);
@@ -416,6 +497,8 @@ window.addEventListener("popstate", closeEditor);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") sync(); else if (editing) save(K.mine, mine); });
 window.addEventListener("online", sync);
 setInterval(() => { if (document.visibilityState === "visible" && !syncing) sync(); }, 15000);
+let shownDay = new Date().toDateString();  // a new day: dates may have come within a week
+setInterval(() => { const d = new Date().toDateString(); if (d !== shownDay) { shownDay = d; render(); } }, 60000);
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 render(); setStatus("", syncedText()); sync();
