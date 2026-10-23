@@ -135,6 +135,8 @@
 <script>
 "use strict";
 const COLORS = { blue: "#5558FF", cyan: "#3FB4FF", purple: "#8F5CFF", red: "#FF4B5C", green: "#34D399", amber: "#FFB547" };
+// a note's color: one of the six names, or "#RRGGBB" picked on the desktop's color wheel
+const colorOf = c => COLORS[c] || (/^#[0-9a-f]{6}$/i.test(c || "") ? c : COLORS.blue);
 const LIVE_ID = "owner-queue";
 const API_BASE = new URLSearchParams(location.search).get("api") || "https://api.github.com";  // ?api= only for local tests
 const K = { token: "dn.token", repo: "dn.repo", mine: "dn.mine", base: "dn.base", sha: "dn.sha", synced: "dn.synced" };
@@ -357,13 +359,13 @@ function render() {
     const n = (sid && g.find(x => x.id === shownTab[sid])) || g[0];
     const el = document.createElement("div");
     el.className = "card" + (n.id === LIVE_ID ? " live" : "") + (sid ? " stacked" : "");
-    el.style.setProperty("--glow", COLORS[n.color] || COLORS.blue);
+    el.style.setProperty("--glow", colorOf(n.color));
     if (sid) {
       const tabs = document.createElement("div"); tabs.className = "tabs";
       for (const m of g) {
         const tb = document.createElement("button");
         tb.className = "tab" + (m === n ? " on" : "");
-        tb.style.setProperty("--c", COLORS[m.color] || COLORS.blue);
+        tb.style.setProperty("--c", colorOf(m.color));
         tb.textContent = titleOf(m);
         tb.onclick = e => { e.stopPropagation(); shownTab[sid] = m.id; save("dn.shownTab", shownTab); render(); };
         tabs.append(tb);
@@ -432,7 +434,7 @@ function openEditor(id, intoStack) {
 
 function paintChips(color) {
   $("chips").innerHTML = "";
-  $("editor").style.setProperty("--glowc", COLORS[color] || COLORS.blue);
+  $("editor").style.setProperty("--glowc", colorOf(color));
   for (const [name, hex] of Object.entries(COLORS)) {
     const c = document.createElement("button");
     c.className = "chip" + (name === color ? " on" : ""); c.style.background = hex; c.style.setProperty("--c", hex);
@@ -454,7 +456,7 @@ function openPicker() {   // choose a note or stack to put this note into
   for (const g of groups()) {
     if (g.some(x => x.id === n.id)) continue;
     const b = document.createElement("button"); b.className = "pick";
-    b.style.setProperty("--c", COLORS[g[0].color] || COLORS.blue);
+    b.style.setProperty("--c", colorOf(g[0].color));
     b.textContent = g.length > 1 ? g.map(titleOf).join("  ·  ") : titleOf(g[0]);
     b.onclick = () => { joinStack(n.id, g[0].id); $("picker").classList.remove("open"); paintStackButton(); };
     list.append(b);
