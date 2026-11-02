@@ -82,6 +82,8 @@
   .form p { margin: 0; color: #C9CCE0; font-size: 14px; }
   .form ol { margin: 0; padding-left: 20px; color: #C9CCE0; font-size: 14px; }
   a { color: var(--cyan); }
+  .hl { background: #FFE066; color: #1A1B26; border-radius: 3px; padding: 0 1px; }
+  #fmtNote { padding: 0 16px 8px; font-size: 13px; color: var(--muted); display: none; }
 </style>
 </head>
 <body>
@@ -103,6 +105,7 @@
     <button id="del" class="danger">Delete</button>
   </div>
   <div class="chips" id="chips"></div>
+  <div id="fmtNote">Bold and the other formatting from your desktop are kept as you type here; they show in the list and on the desktop.</div>
   <textarea id="text" placeholder="Type a note. The first line is its title."></textarea>
 </section>
 
@@ -152,7 +155,94 @@ let editing = null, syncing = false, again = false, pushTimer = null;
 const uid = () => Math.random().toString(16).slice(2, 10);
 const content = n => n ? n.text + "\u0000" + n.color : null;
 const place = n => n ? (n.stack || "") + "\u0000" + (n.stack ? (n.tab ?? 0) : "") : null;
-const sig = n => n ? content(n) + "\u0001" + place(n) : null;
+const sig = n => n ? content(n) + "\u0001" + place(n) + "\u0001" + fmtKey(n.fmt) : null;
+
+// ----- formatting: bold, italic, underline, strikethrough, highlight (same rules as app/formatting.py; keep in step) -----
+// n.fmt = [[start, end, style, words], ...]: offsets in characters (code points, as Python counts), style one of
+// FMT_STYLES, and the words the run covers. A run whose words aren't where it says finds them nearby or is dropped.
+const FMT_STYLES = ["b", "i", "u", "s", "h"];
+const cps = s => Array.from(s || "");
+function fmtClean(runs) {
+  const out = [];
+  for (const r of Array.isArray(runs) ? runs : []) {
+    if (!Array.isArray(r) || r.length < 3 || !Number.isInteger(r[0]) || !Number.isInteger(r[1]) || !FMT_STYLES.includes(r[2])) continue;
+    out.push([r[0], r[1], r[2], typeof r[3] === "string" ? r[3] : null]);
+  }
+  return out;
+}
+const fmtKey = runs => JSON.stringify(fmtClean(runs).map(r => r.slice(0, 3)));
+function fmtNearest(T, W, near) {   // where code points W occur in T closest to near, or null
+  let best = null;
+  for (let i = 0; i + W.length <= T.length; i++) {
+    let k = 0; while (k < W.length && T[i + k] === W[k]) k++;
+    if (k < W.length) continue;
+    if (best === null || Math.abs(i - near) < Math.abs(best - near)) best = i; else if (i > near) break;
+  }
+  return best;
+}
+function fmtHeal(text, runs) {
+  const T = cps(text), n = T.length, spans = Object.fromEntries(FMT_STYLES.map(s => [s, []]));
+  for (let [s, e, st, w] of fmtClean(runs)) {
+    if (w !== null) {
+      if (!w) continue;
+      const W = cps(w);
+      if (!(s >= 0 && s <= n && T.slice(s, s + W.length).join("") === w)) { s = fmtNearest(T, W, s); if (s === null) continue; }
+      e = s + W.length;
+    }
+    s = Math.max(0, Math.min(s, n)); e = Math.max(0, Math.min(e, n));
+    if (e > s) spans[st].push([s, e]);
+  }
+  const out = [];
+  for (const st of FMT_STYLES) {
+    const joined = [];
+    for (const [s, e] of spans[st].sort((a, b) => a[0] - b[0] || a[1] - b[1])) {
+      if (joined.length && s <= joined[joined.length - 1][1]) joined[joined.length - 1][1] = Math.max(joined[joined.length - 1][1], e);
+      else joined.push([s, e]);
+    }
+    for (const [s, e] of joined) out.push([s, e, st, T.slice(s, e).join("")]);
+  }
+  return out.sort((a, b) => a[0] - b[0] || a[1] - b[1] || FMT_STYLES.indexOf(a[2]) - FMT_STYLES.indexOf(b[2]));
+}
+function fmtMerge(b, m, t, text) {   // a side that changed its formatting wins; both: m (the side whose words were kept)
+  const B = fmtKey(b), M = fmtKey(m), T = fmtKey(t);
+  return fmtHeal(text, (M === B && T !== B ? t : m) || []);
+}
+function fmtRemapEdit(old, nu, runs) {   // one edit in one place (typing here): runs follow their words
+  const O = cps(old), N = cps(nu); let pre = 0, suf = 0;
+  const lim = Math.min(O.length, N.length);
+  while (pre < lim && O[pre] === N[pre]) pre++;
+  while (suf < lim - pre && O[O.length - 1 - suf] === N[N.length - 1 - suf]) suf++;
+  const oEnd = O.length - suf, nEnd = N.length - suf, d = N.length - O.length;
+  const start = p => p < pre ? p : p >= oEnd ? p + d : pre;          // a run's start follows its first letter
+  const end = p => p - 1 < pre ? p : p - 1 >= oEnd ? p + d : nEnd;   // its end, its last letter
+  const moved = [];
+  for (const [s0, e0, st] of fmtClean(runs)) {
+    const s = Math.max(0, Math.min(s0, O.length)), e = Math.max(0, Math.min(e0, O.length));
+    if (e <= s) continue;
+    const ns = start(s), ne = end(e);
+    if (ne > ns) moved.push([ns, ne, st, N.slice(ns, ne).join("")]);
+  }
+  return fmtHeal(nu, moved);
+}
+function withFmt(n, runs) { const out = { ...n }; delete out.fmt; if (runs && runs.length) out.fmt = runs; return out; }
+function fmtWords(el, line, from, runs) {   // line's words into el, formatted (from: where the line starts in the note)
+  const L = cps(line), to = from + L.length;
+  const rs = (runs || []).filter(r => r[1] > from && r[0] < to);
+  if (!rs.length) { el.append(line); return; }
+  const pts = [...new Set([0, L.length, ...rs.flatMap(r => [Math.max(0, r[0] - from), Math.min(L.length, r[1] - from)])])].sort((a, b) => a - b);
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const a = pts[k], z = pts[k + 1], seg = L.slice(a, z).join("");
+    const on = new Set(rs.filter(r => r[0] - from <= a && z <= r[1] - from).map(r => r[2]));
+    if (!on.size) { el.append(seg); continue; }
+    const sp = document.createElement("span"); sp.textContent = seg;
+    if (on.has("b")) sp.style.fontWeight = "700";
+    if (on.has("i")) sp.style.fontStyle = "italic";
+    const deco = [on.has("u") && "underline", on.has("s") && "line-through"].filter(Boolean).join(" ");
+    if (deco) sp.style.textDecoration = deco;
+    if (on.has("h")) sp.className = "hl";
+    el.append(sp);
+  }
+}
 function withPlace(n, from) {   // n's words with from's stack and tab
   const out = { ...n }; delete out.stack; delete out.tab;
   if (from && from.stack) { out.stack = from.stack; out.tab = from.tab ?? 0; }
@@ -173,14 +263,19 @@ function merge(b, m, t) {
   for (const id of ids) {
     const B = b[id], M = m[id], T = t[id];
     let pick;
+    let both = false;
     if (id === LIVE_ID) pick = T;
     else if (content(M) === content(T)) pick = M || T;
     else if (content(M) === content(B)) pick = T;
     else if (content(T) === content(B)) pick = M;
     else if (!M) pick = T;
     else if (!T) pick = M;
-    else { pick = M; conflicts++; const c = { ...T, id: uid(), updated: Date.now() }; out[c.id] = c; }
-    if (pick && M && T) pick = withPlace(pick, place(M) === place(B) ? T : M);
+    else { pick = M; both = true; conflicts++; const c = { ...T, id: uid(), updated: Date.now() }; out[c.id] = c; }
+    if (pick && M && T) {
+      const [kept, other] = pick === T ? [T, M] : [M, T];   // whose words were kept, and the other side
+      pick = withPlace(pick, place(M) === place(B) ? T : M);
+      if (!both && id !== LIVE_ID) pick = withFmt(pick, fmtMerge(B && B.fmt, kept.fmt, other.fmt, pick.text || ""));
+    }
     if (pick) out[id] = pick;
   }
   return [tidyStacks(out), conflicts];
@@ -378,13 +473,17 @@ function render() {
     }
     const [first, ...rest] = (n.text || "").split("\n");
     const due = new Set(dueLines(n.text));
-    const t = document.createElement("div"); t.className = "title" + (due.has(0) ? " due" : ""); t.textContent = first || "(empty note)";
+    const runs = n.fmt && n.fmt.length ? fmtHeal(n.text || "", n.fmt) : [];
+    const starts = [0]; for (const line of (n.text || "").split("\n")) starts.push(starts[starts.length - 1] + cps(line).length + 1);
+    const t = document.createElement("div"); t.className = "title" + (due.has(0) ? " due" : "");
+    if (first) fmtWords(t, first, 0, runs); else t.textContent = "(empty note)";
     const b = document.createElement("div"); b.className = "body";
     let skip = 0; while (skip < rest.length && !rest[skip]) skip++;  // blank lines right under the title
     rest.slice(skip).forEach((line, i) => {  // each line, red if it names a date within a week
       if (i) b.append("\n");
-      if (due.has(i + skip + 1)) { const sp = document.createElement("span"); sp.className = "due"; sp.textContent = line; b.append(sp); }
-      else b.append(line);
+      const at = starts[i + skip + 1];
+      if (due.has(i + skip + 1)) { const sp = document.createElement("span"); sp.className = "due"; fmtWords(sp, line, at, runs); b.append(sp); }
+      else fmtWords(b, line, at, runs);
     });
     el.append(t, b);
     if (n.id === LIVE_ID) { const tg = document.createElement("div"); tg.className = "tag"; tg.textContent = "From your desktop · view only"; el.append(tg); }
@@ -423,6 +522,7 @@ function openEditor(id, intoStack) {
   editing = { id, isNew };
   const n = mine[id], live = id === LIVE_ID;
   $("text").value = n.text; $("text").readOnly = live;
+  $("fmtNote").style.display = !live && n.fmt && n.fmt.length ? "block" : "none";
   $("del").style.display = live ? "none" : "";
   $("chips").style.display = live ? "none" : "";
   paintStackButton();
@@ -475,7 +575,9 @@ function closeEditor() {
 }
 
 $("text").addEventListener("input", () => {
-  const n = mine[editing.id]; n.text = $("text").value; n.updated = Date.now(); save(K.mine, mine); schedulePush();
+  const n = mine[editing.id], v = $("text").value;
+  if (n.fmt && n.fmt.length) { const f = fmtRemapEdit(n.text, v, n.fmt); if (f.length) n.fmt = f; else delete n.fmt; }
+  n.text = v; n.updated = Date.now(); save(K.mine, mine); schedulePush();
 });
 const leaveEditor = () => (history.state && history.state.editor) ? history.back() : closeEditor();
 $("back").onclick = leaveEditor;
